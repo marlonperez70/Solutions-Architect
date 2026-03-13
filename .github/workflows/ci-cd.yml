@@ -1,0 +1,284 @@
+name: Enterprise Platform CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ============= TESTING =============
+  
+  test-frontend:
+    runs-on: ubuntu-latest
+    name: Test Frontend
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        run: cd client && pnpm install
+      
+      - name: Run linter
+        run: cd client && pnpm format --check
+      
+      - name: Run tests
+        run: cd client && pnpm test
+      
+      - name: Build frontend
+        run: cd client && pnpm build
+
+  test-backend:
+    runs-on: ubuntu-latest
+    name: Test Backend
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Run TypeScript check
+        run: pnpm check
+      
+      - name: Run tests
+        run: pnpm test
+      
+      - name: Build backend
+        run: pnpm build
+
+  test-microservices:
+    runs-on: ubuntu-latest
+    name: Test Microservices
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/requirements.txt
+      
+      - name: Run linter
+        run: |
+          pip install pylint
+          pylint services/*/main.py
+      
+      - name: Run tests
+        run: |
+          pip install pytest pytest-cov
+          pytest services/ --cov --cov-report=xml
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+
+  # ============= SECURITY SCANNING =============
+  
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scanning
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Run SAST with SonarQube
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ============= BUILD DOCKER IMAGES =============
+  
+  build-images:
+    needs: [test-frontend, test-backend, test-microservices, security-scan]
+    runs-on: ubuntu-latest
+    name: Build Docker Images
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha
+      
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./client
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Build and push backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Build and push microservices images
+        run: |
+          for service in services/*/; do
+            service_name=$(basename "$service")
+            docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ms-$service_name:latest "$service"
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
+              docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/ms-$service_name:latest
+            fi
+          done
+
+  # ============= DEPLOY TO STAGING =============
+  
+  deploy-staging:
+    needs: build-images
+    runs-on: ubuntu-latest
+    name: Deploy to Staging
+    if: github.ref == 'refs/heads/develop'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to Kubernetes Staging
+        run: |
+          echo "Deploying to staging environment..."
+          kubectl apply -f k8s/staging/ --kubeconfig=${{ secrets.KUBE_CONFIG_STAGING }}
+          kubectl rollout status deployment/enterprise-platform -n staging
+      
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests on staging..."
+          curl -f https://staging.enterprise-platform.com/health || exit 1
+
+  # ============= DEPLOY TO PRODUCTION =============
+  
+  deploy-production:
+    needs: build-images
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    environment:
+      name: production
+      url: https://enterprise-platform.com
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to Kubernetes Production
+        run: |
+          echo "Deploying to production environment..."
+          kubectl apply -f k8s/production/ --kubeconfig=${{ secrets.KUBE_CONFIG_PRODUCTION }}
+          kubectl rollout status deployment/enterprise-platform -n production
+      
+      - name: Run health checks
+        run: |
+          echo "Running health checks on production..."
+          curl -f https://enterprise-platform.com/health || exit 1
+          curl -f https://enterprise-platform.com/api/health || exit 1
+      
+      - name: Notify deployment
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Successfully deployed to production!'
+            })
+
+  # ============= PERFORMANCE TESTING =============
+  
+  performance-test:
+    runs-on: ubuntu-latest
+    name: Performance Testing
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+      
+      - name: Install dependencies
+        run: npm install -g lighthouse
+      
+      - name: Run Lighthouse
+        run: |
+          lighthouse https://staging.enterprise-platform.com --output=json --output-path=./lighthouse.json
+      
+      - name: Comment PR with results
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const lighthouse = JSON.parse(fs.readFileSync('./lighthouse.json', 'utf8'));
+            const score = lighthouse.categories.performance.score * 100;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `📊 Lighthouse Performance Score: ${score}/100`
+            })
