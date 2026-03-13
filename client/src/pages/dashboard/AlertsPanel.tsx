@@ -60,7 +60,7 @@ export default function AlertsPanel() {
     },
   });
 
-  const filteredAlerts = selectedStatus
+  const filteredAlerts = selectedStatus && selectedStatus !== "all"
     ? alerts?.filter((a) => a.status === selectedStatus)
     : alerts;
 
@@ -113,7 +113,7 @@ export default function AlertsPanel() {
               <SelectValue placeholder="Filtrar por estado..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">Todos los estados</SelectItem>
+              <SelectItem value="all">Todos los estados</SelectItem>
               <SelectItem value="open">Abierta</SelectItem>
               <SelectItem value="acknowledged">Reconocida</SelectItem>
               <SelectItem value="resolved">Resuelta</SelectItem>

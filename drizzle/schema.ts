@@ -12,8 +12,6 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }).unique(),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin", "agent"]).default("user").notNull(),
-  lastIpAddress: varchar("lastIpAddress", { length: 45 }),
-  lastUserAgent: text("lastUserAgent"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -44,8 +42,6 @@ export const agents = mysqlTable("agents", {
   capabilities: json("capabilities").$type<string[]>().default([]).notNull(),
   config: json("config").$type<Record<string, unknown>>().notNull(),
   createdBy: int("createdBy").notNull(),
-  isActive: boolean("isActive").default(true).notNull(),
-  lastExecutedAt: timestamp("lastExecutedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => ({
@@ -100,31 +96,17 @@ export const alerts = mysqlTable("alerts", {
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
   type: mysqlEnum("type", [
-    "service_failure",
-    "security_incident",
-    "performance_degradation",
-    "quota_exceeded",
-    "agent_error",
+    "performance_issue",
+    "security_breach",
+    "system_error",
+    "business_alert",
     "custom"
   ]).notNull(),
-  severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("low").notNull(),
   status: mysqlEnum("status", ["open", "acknowledged", "resolved", "dismissed"]).default("open").notNull(),
-  eventId: int("eventId"),
-  assignedTo: int("assignedTo"),
-  emailSent: boolean("emailSent").default(false).notNull(),
-  emailSentAt: timestamp("emailSentAt"),
-  resolvedAt: timestamp("resolvedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => ({
-  eventIdFk: foreignKey({
-    columns: [table.eventId],
-    foreignColumns: [events.id],
-  }),
-  assignedToFk: foreignKey({
-    columns: [table.assignedTo],
-    foreignColumns: [users.id],
-  }),
   typeIdx: index("alert_type_idx").on(table.type),
   severityIdx: index("alert_severity_idx").on(table.severity),
   statusIdx: index("alert_status_idx").on(table.status),
@@ -194,7 +176,6 @@ export const documents = mysqlTable("documents", {
   s3Url: text("s3Url").notNull(),
   uploadedBy: int("uploadedBy").notNull(),
   version: int("version").default(1).notNull(),
-  isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => ({
@@ -238,7 +219,6 @@ export type InsertConfiguration = typeof configurations.$inferInsert;
 export const usersRelations = relations(users, ({ many }) => ({
   agents: many(agents),
   events: many(events),
-  alerts: many(alerts),
   auditLogs: many(auditLogs),
   documents: many(documents),
 }));
@@ -260,18 +240,10 @@ export const eventsRelations = relations(events, ({ one, many }) => ({
     fields: [events.agentId],
     references: [agents.id],
   }),
-  alerts: many(alerts),
 }));
 
 export const alertsRelations = relations(alerts, ({ one }) => ({
-  event: one(events, {
-    fields: [alerts.eventId],
-    references: [events.id],
-  }),
-  assignee: one(users, {
-    fields: [alerts.assignedTo],
-    references: [users.id],
-  }),
+  // Alerts are independent entities
 }));
 
 export const documentsRelations = relations(documents, ({ one }) => ({

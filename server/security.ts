@@ -32,15 +32,10 @@ export async function calculateRiskScore(
   let riskScore = 0;
 
   // Factor 1: IP Address changes (0-30 points)
-  if (ctx.user?.lastIpAddress && ctx.user.lastIpAddress !== ctx.req.ip) {
-    riskScore += 20; // IP changed
-  }
+  // Note: IP tracking removed - not stored in schema
 
   // Factor 2: User Agent changes (0-20 points)
-  const userAgent = ctx.req.headers["user-agent"] as string;
-  if (ctx.user?.lastUserAgent && ctx.user.lastUserAgent !== userAgent) {
-    riskScore += 15; // User agent changed
-  }
+  // Note: User agent tracking removed - not stored in schema
 
   // Factor 3: Time-based anomalies (0-20 points)
   const now = Date.now();

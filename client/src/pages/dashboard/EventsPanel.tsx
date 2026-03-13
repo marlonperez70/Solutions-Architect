@@ -50,7 +50,7 @@ export default function EventsPanel() {
     limit: 50,
   });
 
-  const filteredEvents = selectedType
+  const filteredEvents = selectedType && selectedType !== "all"
     ? events?.filter((e) => e.eventType === selectedType)
     : events;
 
@@ -84,7 +84,7 @@ export default function EventsPanel() {
               <SelectValue placeholder="Filtrar por tipo..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">Todos los tipos</SelectItem>
+              <SelectItem value="all">Todos los tipos</SelectItem>
               {eventTypes.map((type) => (
                 <SelectItem key={type} value={type}>
                   {type}
